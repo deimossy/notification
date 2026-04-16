@@ -113,12 +113,12 @@ services:
       KAFKA_GROUP_ID: notification-email-sender
 
       SMTP_HOST: smtp.gmail.com
-      SMTP_PORT: 465
+      SMTP_PORT: 587
       SMTP_USERNAME: igatellem@gmail.com
-      SMTP_PASSWORD: kuqnfeaansgskryg
+      SMTP_PASSWORD: bpevmrtxdokqvuiy
       SMTP_FROM: igatellem@gmail.com
 
-      SMTP_STARTTLS: true
+      SMTP_START_TLS: true
       SMTP_USE_TLS: false
       SMTP_INSECURE_SKIP_VERIFY: false
 
