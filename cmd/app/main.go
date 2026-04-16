@@ -22,13 +22,21 @@ func main() {
 		log.Fatal("failed to initialize application", zap.Error(err))
 	}
 
-	go application.Run()
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		application.Run()
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	sig := <-stop
-	log.Info("receiving shutdown signal", zap.String("signal", sig.String()))
+	select {
+	case sig := <-stop:
+		log.Info("receiving shutdown signal", zap.String("signal", sig.String()))
+	case <-runDone:
+		log.Warn("application run loop exited")
+	}
 
 	application.Stop()
 }

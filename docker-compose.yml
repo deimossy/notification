@@ -1,0 +1,131 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: notification-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: notification
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d notification"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: notification-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: notification-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      /bin/bash -ec "
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.email.send --partitions 1 --replication-factor 1 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.email.dlq --partitions 1 --replication-factor 1 &&
+      echo 'Kafka topics created'
+      "
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: notification-mailpit
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrator
+    container_name: notification-migrator
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: notification
+      POSTGRES_SSL_MODE: disable
+      GOOSE_MIGRATION_DIR: ./migrations
+      CONFIG_PATH: config/config.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  notification:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    container_name: notification-app
+    environment:
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 8080
+      GIN_MODE: release
+
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: notification
+      POSTGRES_SSL_MODE: disable
+
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: notifications.email.send
+      KAFKA_DLQ_TOPIC: notifications.email.dlq
+      KAFKA_GROUP_ID: notification-email-sender
+
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: no-reply@example.com
+      SMTP_DEFAULT_SUBJECT: Notification
+
+      CONFIG_PATH: config/config.yaml
+      LOGGER_CONFIG_PATH: config/logger.json
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      migrator:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+volumes:
+  postgres_data:

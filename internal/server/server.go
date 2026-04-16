@@ -56,6 +56,12 @@ func registerRoutes(log *zap.Logger, cfg config.HTTPConfig, handlers ...Handler)
 
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger(log))
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	})
 
 	for _, handler := range handlers {
 		handler.RegisterRoutes(r)

@@ -6,9 +6,39 @@ server:
     write: 5s
     read: 5s
     idle: 60s
+
 postgres:
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 1h
   conn_max_idle_time: 25m
   timeout: 5s
+
+kafka:
+  brokers:
+    - "localhost:9092"
+  topic: "notifications.email.send"
+  dlq_topic: "notifications.email.dlq"
+  group_id: "notification-email-sender"
+  read_min_bytes: 1024
+  read_max_bytes: 1048576
+  commit_timeout: 5s
+
+smtp:
+  host: "localhost"
+  port: 1025
+  from: "no-reply@example.com"
+  use_tls: false
+  start_tls: false
+  insecure_skip_verify: false
+  dial_timeout: 10s
+  send_timeout: 15s
+  default_subject: "Notification"
+
+worker:
+  max_retries: 3
+  initial_backoff: 1s
+  max_backoff: 20s
+  loop_error_backoff: 2s
+  processing_timeout: 30s
+  lock_ttl: 2m
