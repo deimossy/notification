@@ -24,6 +24,16 @@ kafka:
   read_max_bytes: 1048576
   commit_timeout: 5s
 
+alerts_kafka:
+  brokers:
+    - "localhost:9092"
+  topic: "notifications.alerts.created"
+  dlq_topic: "notifications.alerts.dlq"
+  group_id: "notification-alerts-inbox"
+  read_min_bytes: 1024
+  read_max_bytes: 1048576
+  commit_timeout: 5s
+
 smtp:
   host: "localhost"
   port: 1025
@@ -34,6 +44,9 @@ smtp:
   dial_timeout: 10s
   send_timeout: 15s
   default_subject: "Notification"
+
+auth:
+  secret: "my-super-secret-key"
 
 worker:
   max_retries: 3

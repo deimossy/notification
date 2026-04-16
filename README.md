@@ -1,40 +1,58 @@
 # Notification Service
 
-Микросервис для отправки email-уведомлений из Kafka.
+Микросервис уведомлений:
+- отправка email из Kafka,
+- inbox-алерты (события из Kafka -> сохранение в БД -> чтение фронтом по API).
 
-## Поток обработки
+## Потоки обработки
 
-1. Сервис читает сообщения из топика `kafka.topic` в consumer group `kafka.group_id`.
+### 1) Email pipeline
+1. Сервис читает события из `kafka.topic`.
 2. Валидирует payload (`message_id`, `to`, `text|html`).
-3. Пытается захватить обработку сообщения через Postgres-таблицу `notification_email_message_state`.
-4. Отправляет письмо через SMTP.
-5. При успехе помечает сообщение как `processed` и коммитит offset.
-6. При временных ошибках ретраит с exponential backoff.
-7. При невалидном payload или исчерпании ретраев публикует событие в DLQ (`kafka.dlq_topic`) и коммитит offset.
+3. Отправляет письмо через SMTP.
+4. Пишет результат в `notification_email_message_state`.
+5. При невосстановимых ошибках отправляет событие в `kafka.dlq_topic`.
 
-## Формат входного Kafka-сообщения
+### 2) Alerts inbox pipeline
+1. Сервис читает события из `alerts_kafka.topic` (например, `notifications.alerts.created`).
+2. Валидирует payload алерта (`event_id`, `user_id`, `title`, `message` и т.д.).
+3. Сохраняет алерт в `notification_alerts`.
+4. По `event_id` выполняется идемпотентность (`UNIQUE`) — дубль не создается.
+5. Невалидные/фатальные события отправляются в `alerts_kafka.dlq_topic`.
+
+## Формат входного события для алертов
 
 ```json
 {
-  "message_id": "31a5d5f6-b06a-4d34-8894-a8f8614a1a4f",
-  "to": "user@example.com",
-  "subject": "Welcome",
-  "text": "Hello from notification service",
-  "html": "<p>Hello from notification service</p>",
-  "correlation_id": "req-42"
+  "event_id": "event-001",
+  "user_id": "11111111-1111-1111-1111-111111111111",
+  "type": "invoice",
+  "title": "Новый счет",
+  "message": "Счет #123 готов к оплате",
+  "severity": "info",
+  "payload": {
+    "invoice_id": "123"
+  },
+  "created_at": "2026-04-16T15:30:00Z"
 }
 ```
 
-Поля:
-- `message_id` — обязательный уникальный идентификатор сообщения.
-- `to` — обязательный email получателя.
-- `text`/`html` — должен быть минимум один из этих полей.
-- `subject` — опционально, при отсутствии используется `smtp.default_subject`.
+`severity`: `info | warning | critical | success`.
+
+## API для фронта (alerts)
+
+Все эндпоинты требуют `Authorization: Bearer <JWT>`.
+`user_id` берется из JWT claim `user_id`.
+
+- `GET /api/v1/alerts?limit=20&offset=0`
+- `GET /api/v1/alerts/unread-count`
+- `PATCH /api/v1/alerts/:id/read`
+- `PATCH /api/v1/alerts/read-all`
 
 ## Конфигурация
 
-Основная конфигурация находится в `config/config.yaml`.
-Чувствительные параметры (`SMTP_PASSWORD`, `POSTGRES_PASSWORD`) рекомендуется передавать через env.
+Основная конфигурация — `config/config.yaml`.
+Отдельный блок Kafka для алертов: `alerts_kafka`.
 
 ## Миграции
 
@@ -48,108 +66,28 @@ go run ./cmd/migrator -command up
 go run ./cmd/app
 ```
 
-## Health endpoints
+## Health
 
 - `GET /healthz`
 - `GET /readyz`
 
-## Полный Локальный E2E Тест (Docker Compose)
+## Docker Compose
 
-### 1) Поднять инфраструктуру и сервис
+Поднимает: Postgres, Kafka (KRaft), Kafka topic init, Mailpit, migrator, notification.
 
 ```bash
 docker compose up -d --build
 ```
 
-Проверить, что все сервисы поднялись:
+Проверить:
 
 ```bash
 docker compose ps
 docker compose logs -f notification
 ```
 
-### 2) Проверить health
-
-```bash
-curl -i http://localhost:8080/healthz
-curl -i http://localhost:8080/readyz
-```
-
-### 3) Отправить успешное сообщение в Kafka
-
-```bash
-docker compose exec -T kafka kafka-console-producer \
-  --bootstrap-server kafka:9092 \
-  --topic notifications.email.send <<'EOF'
-{"message_id":"11111111-1111-1111-1111-111111111111","to":"user@example.com","subject":"Smoke test","text":"Hello from Kafka"}
-EOF
-```
-
-### 4) Проверить успешную отправку
-
-1. Открыть Mailpit UI: `http://localhost:8025` и убедиться, что письмо пришло.
-2. Проверить состояние в Postgres:
-
-```bash
-docker compose exec -T postgres psql -U postgres -d notification -c \
-"SELECT message_id,status,last_error,updated_at FROM notification_email_message_state ORDER BY updated_at DESC LIMIT 10;"
-```
-
-Для отправленного `message_id` статус должен быть `processed`.
-
-### 5) Протестировать неуспешный кейс и DLQ
-
-Отправить невалидный payload (без `to`):
-
-```bash
-docker compose exec -T kafka kafka-console-producer \
-  --bootstrap-server kafka:9092 \
-  --topic notifications.email.send <<'EOF'
-{"message_id":"22222222-2222-2222-2222-222222222222","subject":"Bad event","text":"This must go to DLQ"}
-EOF
-```
-
-Прочитать DLQ:
-
-```bash
-docker compose exec -T kafka kafka-console-consumer \
-  --bootstrap-server kafka:9092 \
-  --topic notifications.email.dlq \
-  --from-beginning \
-  --max-messages 1
-```
-
-Проверить состояние в БД:
-
-```bash
-docker compose exec -T postgres psql -U postgres -d notification -c \
-"SELECT message_id,status,last_error,updated_at FROM notification_email_message_state WHERE message_id='22222222-2222-2222-2222-222222222222';"
-```
-
-Ожидаемый статус: `failed`.
-
-### 6) Проверка идемпотентности
-
-Отправить то же самое успешное сообщение второй раз (тот же `message_id`):
-
-```bash
-docker compose exec -T kafka kafka-console-producer \
-  --bootstrap-server kafka:9092 \
-  --topic notifications.email.send <<'EOF'
-{"message_id":"11111111-1111-1111-1111-111111111111","to":"user@example.com","subject":"Duplicate","text":"Should be ignored as already processed"}
-EOF
-```
-
-Сервис должен залогировать, что сообщение уже обработано, и не отправлять дубль.
-
-### 7) Остановка и очистка
+Остановить:
 
 ```bash
 docker compose down
-```
-
-С удалением volume Postgres:
-
-```bash
-docker compose down -v
 ```

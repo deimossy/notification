@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: notification
     ports:
-      - "5433:5432" # если у тебя уже занят 5432 на хосте
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,6 +31,7 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -40,10 +41,10 @@ services:
     ports:
       - "9092:9092"
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
       start_period: 20s
     restart: unless-stopped
 
@@ -58,6 +59,8 @@ services:
       /bin/bash -ec "
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.email.send --partitions 1 --replication-factor 1 &&
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.email.dlq --partitions 1 --replication-factor 1 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.alerts.created --partitions 1 --replication-factor 1 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notifications.alerts.dlq --partitions 1 --replication-factor 1 &&
       echo 'Kafka topics created'
       "
 
@@ -112,15 +115,17 @@ services:
       KAFKA_DLQ_TOPIC: notifications.email.dlq
       KAFKA_GROUP_ID: notification-email-sender
 
-      SMTP_HOST: smtp.gmail.com
-      SMTP_PORT: 587
-      SMTP_USERNAME: igatellem@gmail.com
-      SMTP_PASSWORD: bpevmrtxdokqvuiy
-      SMTP_FROM: igatellem@gmail.com
+      ALERTS_KAFKA_BROKERS: kafka:9092
+      ALERTS_KAFKA_TOPIC: notifications.alerts.created
+      ALERTS_KAFKA_DLQ_TOPIC: notifications.alerts.dlq
+      ALERTS_KAFKA_GROUP_ID: notification-alerts-inbox
 
-      SMTP_START_TLS: true
-      SMTP_USE_TLS: false
-      SMTP_INSECURE_SKIP_VERIFY: false
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: no-reply@example.com
+      SMTP_DEFAULT_SUBJECT: Notification
+
+      JWT_SECRET: my-super-secret-key
 
       CONFIG_PATH: config/config.yaml
       LOGGER_CONFIG_PATH: config/logger.json

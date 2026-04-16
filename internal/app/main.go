@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/linspacestrom/go-project/internal/alerts"
 	"github.com/linspacestrom/go-project/internal/config"
 	"github.com/linspacestrom/go-project/internal/email"
 	"github.com/linspacestrom/go-project/internal/kafka"
@@ -17,6 +18,7 @@ import (
 
 type Repository interface {
 	email.MessageStateStore
+	alerts.Repository
 	Close()
 }
 
@@ -26,12 +28,13 @@ type Consumer interface {
 }
 
 type App struct {
-	log      *zap.Logger
-	api      *server.Server
-	cfg      *config.Config
-	repo     Repository
-	consumer Consumer
-	cancel   context.CancelFunc
+	log           *zap.Logger
+	api           *server.Server
+	cfg           *config.Config
+	repo          Repository
+	emailConsumer Consumer
+	alertConsumer Consumer
+	cancel        context.CancelFunc
 }
 
 func New(log *zap.Logger, cfg *config.Config) (*App, error) {
@@ -43,15 +46,21 @@ func New(log *zap.Logger, cfg *config.Config) (*App, error) {
 
 	sender := email.NewSMTPSender(cfg.SMTP)
 	emailService := email.NewService(log, sender, repo, cfg.SMTP.DefaultSubject, cfg.Worker.LockTTL)
-	consumer := kafka.NewConsumer(log, cfg.Kafka, cfg.Worker, emailService)
-	api := server.New(log, cfg.Server)
+	emailConsumer := kafka.NewConsumer(log, cfg.Kafka, cfg.Worker, emailService)
+
+	alertsService := alerts.NewService(log, repo)
+	alertsConsumer := kafka.NewConsumer(log, cfg.AlertsKafka.ToKafkaConfig(cfg.Kafka), cfg.Worker, alertsService)
+	alertsHandler := alerts.NewHandler(alertsService, cfg.Auth.Secret)
+
+	api := server.New(log, cfg.Server, alertsHandler)
 
 	return &App{
-		log:      log,
-		api:      api,
-		cfg:      cfg,
-		repo:     repo,
-		consumer: consumer,
+		log:           log,
+		api:           api,
+		cfg:           cfg,
+		repo:          repo,
+		emailConsumer: emailConsumer,
+		alertConsumer: alertsConsumer,
 	}, nil
 }
 
@@ -79,12 +88,23 @@ func (a *App) Run() {
 		return nil
 	})
 	group.Go(func() error {
-		if err := a.consumer.Run(groupCtx); err != nil {
+		if err := a.emailConsumer.Run(groupCtx); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 
-			return fmt.Errorf("kafka consumer failed: %w", err)
+			return fmt.Errorf("email kafka consumer failed: %w", err)
+		}
+
+		return nil
+	})
+	group.Go(func() error {
+		if err := a.alertConsumer.Run(groupCtx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+
+			return fmt.Errorf("alerts kafka consumer failed: %w", err)
 		}
 
 		return nil
@@ -100,9 +120,14 @@ func (a *App) Stop() {
 		a.cancel()
 	}
 
-	a.log.Info("closing Kafka consumer")
-	if err := a.consumer.Close(); err != nil {
-		a.log.Error("failed to close Kafka consumer", zap.Error(err))
+	a.log.Info("closing alerts Kafka consumer")
+	if err := a.alertConsumer.Close(); err != nil {
+		a.log.Error("failed to close alerts Kafka consumer", zap.Error(err))
+	}
+
+	a.log.Info("closing email Kafka consumer")
+	if err := a.emailConsumer.Close(); err != nil {
+		a.log.Error("failed to close email Kafka consumer", zap.Error(err))
 	}
 
 	a.log.Info("closing HTTP server")

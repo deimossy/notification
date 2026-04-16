@@ -11,12 +11,18 @@ import (
 )
 
 type Config struct {
-	Server   HTTPConfig     `yaml:"server"`
-	Logger   LoggerConfig   `yaml:"logger"`
-	Postgres PostgresConfig `yaml:"postgres"`
-	Kafka    KafkaConfig    `yaml:"kafka"`
-	SMTP     SMTPConfig     `yaml:"smtp"`
-	Worker   WorkerConfig   `yaml:"worker"`
+	Server      HTTPConfig        `yaml:"server"`
+	Logger      LoggerConfig      `yaml:"logger"`
+	Postgres    PostgresConfig    `yaml:"postgres"`
+	Kafka       KafkaConfig       `yaml:"kafka"`
+	AlertsKafka AlertsKafkaConfig `yaml:"alerts_kafka"`
+	SMTP        SMTPConfig        `yaml:"smtp"`
+	Worker      WorkerConfig      `yaml:"worker"`
+	Auth        AuthConfig        `yaml:"auth"`
+}
+
+type AuthConfig struct {
+	Secret string `env:"JWT_SECRET" env-default:"my-super-secret-key" yaml:"secret"`
 }
 
 type HTTPConfig struct {
@@ -59,6 +65,52 @@ type KafkaConfig struct {
 	ReadMinBytes  int           `env:"KAFKA_READ_MIN_BYTES" env-default:"1024" yaml:"read_min_bytes"`
 	ReadMaxBytes  int           `env:"KAFKA_READ_MAX_BYTES" env-default:"1048576" yaml:"read_max_bytes"`
 	CommitTimeout time.Duration `env:"KAFKA_COMMIT_TIMEOUT" env-default:"5s" yaml:"commit_timeout"`
+}
+
+type AlertsKafkaConfig struct {
+	Brokers       []string      `env:"ALERTS_KAFKA_BROKERS" env-separator:"," yaml:"brokers"`
+	Topic         string        `env:"ALERTS_KAFKA_TOPIC" yaml:"topic"`
+	DLQTopic      string        `env:"ALERTS_KAFKA_DLQ_TOPIC" yaml:"dlq_topic"`
+	GroupID       string        `env:"ALERTS_KAFKA_GROUP_ID" yaml:"group_id"`
+	ReadMinBytes  int           `env:"ALERTS_KAFKA_READ_MIN_BYTES" yaml:"read_min_bytes"`
+	ReadMaxBytes  int           `env:"ALERTS_KAFKA_READ_MAX_BYTES" yaml:"read_max_bytes"`
+	CommitTimeout time.Duration `env:"ALERTS_KAFKA_COMMIT_TIMEOUT" yaml:"commit_timeout"`
+}
+
+func (c AlertsKafkaConfig) ToKafkaConfig(fallback KafkaConfig) KafkaConfig {
+	cfg := KafkaConfig{
+		Brokers:       c.Brokers,
+		Topic:         c.Topic,
+		DLQTopic:      c.DLQTopic,
+		GroupID:       c.GroupID,
+		ReadMinBytes:  c.ReadMinBytes,
+		ReadMaxBytes:  c.ReadMaxBytes,
+		CommitTimeout: c.CommitTimeout,
+	}
+
+	if len(cfg.Brokers) == 0 {
+		cfg.Brokers = fallback.Brokers
+	}
+	if cfg.Topic == "" {
+		cfg.Topic = "notifications.alerts.created"
+	}
+	if cfg.DLQTopic == "" {
+		cfg.DLQTopic = "notifications.alerts.dlq"
+	}
+	if cfg.GroupID == "" {
+		cfg.GroupID = "notification-alerts-inbox"
+	}
+	if cfg.ReadMinBytes == 0 {
+		cfg.ReadMinBytes = fallback.ReadMinBytes
+	}
+	if cfg.ReadMaxBytes == 0 {
+		cfg.ReadMaxBytes = fallback.ReadMaxBytes
+	}
+	if cfg.CommitTimeout == 0 {
+		cfg.CommitTimeout = fallback.CommitTimeout
+	}
+
+	return cfg
 }
 
 type SMTPConfig struct {
