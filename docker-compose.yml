@@ -38,8 +38,6 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-    ports:
-      - "9092:9092"
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
       interval: 10s
@@ -67,6 +65,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.20
     container_name: notification-mailpit
+    profiles: ["local-mailpit"]
     ports:
       - "8025:8025"
       - "1025:1025"
@@ -120,17 +119,24 @@ services:
       ALERTS_KAFKA_DLQ_TOPIC: notifications.alerts.dlq
       ALERTS_KAFKA_GROUP_ID: notification-alerts-inbox
 
-      SMTP_HOST: mailpit
-      SMTP_PORT: 1025
-      SMTP_FROM: no-reply@example.com
-      SMTP_DEFAULT_SUBJECT: Notification
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+      SMTP_START_TLS: ${SMTP_START_TLS:-true}
+      SMTP_INSECURE_SKIP_VERIFY: ${SMTP_INSECURE_SKIP_VERIFY:-false}
+      SMTP_DIAL_TIMEOUT: ${SMTP_DIAL_TIMEOUT:-10s}
+      SMTP_SEND_TIMEOUT: ${SMTP_SEND_TIMEOUT:-15s}
+      SMTP_DEFAULT_SUBJECT: ${SMTP_DEFAULT_SUBJECT:-Notification}
 
       JWT_SECRET: my-super-secret-key
 
       CONFIG_PATH: config/config.yaml
       LOGGER_CONFIG_PATH: config/logger.json
     ports:
-      - "8080:8080"
+      - "8082:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,8 +146,6 @@ services:
         condition: service_completed_successfully
       migrator:
         condition: service_completed_successfully
-      mailpit:
-        condition: service_started
     restart: unless-stopped
 
 volumes:

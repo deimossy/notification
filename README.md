@@ -73,10 +73,24 @@ go run ./cmd/app
 
 ## Docker Compose
 
-Поднимает: Postgres, Kafka (KRaft), Kafka topic init, Mailpit, migrator, notification.
+Поднимает: Postgres, Kafka (KRaft), Kafka topic init, migrator, notification.
 
 ```bash
 docker compose up -d --build
+```
+
+SMTP по умолчанию настроен на Gmail (`smtp.gmail.com:587`, STARTTLS).  
+Перед запуском:
+
+```bash
+cp .env.example .env
+# заполни SMTP_USERNAME и SMTP_PASSWORD (Google App Password)
+```
+
+Для локального SMTP-стенда можно дополнительно поднять Mailpit:
+
+```bash
+docker compose --profile local-mailpit up -d mailpit
 ```
 
 Проверить:
